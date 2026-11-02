@@ -1,0 +1,159 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --toolbar-bg: #f4f4f5;
+  --toolbar-border: #e0e0e3;
+  --btn-bg: #e8e8ec;
+  --btn-hover: #d4d4d8;
+  --btn-active: #3b82f6;
+  --btn-active-fg: #ffffff;
+  --accent: #3b82f6;
+  --kbd-bg: #e8e8ec;
+  --muted: #71717a;
+  --source-bg: #fafafa;
+  --dirty: #f59e0b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181b;
+    --fg: #e4e4e7;
+    --toolbar-bg: #27272a;
+    --toolbar-border: #3f3f46;
+    --btn-bg: #3f3f46;
+    --btn-hover: #52525b;
+    --btn-active: #3b82f6;
+    --btn-active-fg: #ffffff;
+    --accent: #60a5fa;
+    --kbd-bg: #3f3f46;
+    --muted: #a1a1aa;
+    --source-bg: #1f1f23;
+    --dirty: #fbbf24;
+    color-scheme: dark;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--toolbar-bg);
+  border-bottom: 1px solid var(--toolbar-border);
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
+.toolbar-center {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#dirty-indicator {
+  color: var(--dirty);
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--btn-bg);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.active {
+  background: var(--btn-active);
+  color: var(--btn-active-fg);
+}
+
+#editor-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+#welcome {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+#welcome kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--kbd-bg);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+#editor-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: white;
+}
+
+#source-view {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--source-bg);
+  color: var(--fg);
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 16px;
+  resize: none;
+  outline: none;
+  tab-size: 2;
+}

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Artifact Editor</title>
+  </head>
+  <body>
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <button id="btn-open" title="Open HTML file (Cmd+O)">Open</button>
+        <button id="btn-save" title="Save (Cmd+S)" disabled>Save</button>
+        <button id="btn-save-as" title="Save As (Cmd+Shift+S)" disabled>Save As</button>
+      </div>
+      <div class="toolbar-center">
+        <span id="file-name">No file open</span>
+        <span id="dirty-indicator" hidden>*</span>
+      </div>
+      <div class="toolbar-right">
+        <button id="btn-source" title="Toggle source view">Source</button>
+      </div>
+    </header>
+    <main id="editor-area">
+      <div id="welcome">
+        <p>Open an HTML artifact file to start editing.</p>
+        <p><kbd>Cmd+O</kbd> or click <strong>Open</strong></p>
+      </div>
+      <iframe id="editor-frame" hidden sandbox="allow-same-origin allow-scripts"></iframe>
+      <textarea id="source-view" hidden spellcheck="false"></textarea>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
