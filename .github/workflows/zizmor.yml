@@ -1,0 +1,23 @@
+name: Zizmor
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/**", ".zizmor.yml"]
+  pull_request:
+    paths: [".github/workflows/**", ".zizmor.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - run: pip install zizmor
+
+      - run: zizmor -c .zizmor.yml .github/
