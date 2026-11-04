@@ -8,11 +8,14 @@ const btnOpen = document.getElementById("btn-open");
 const btnSave = document.getElementById("btn-save");
 const btnSaveAs = document.getElementById("btn-save-as");
 const btnSource = document.getElementById("btn-source");
+const btnFetch = document.getElementById("btn-fetch");
+const urlInput = document.getElementById("url-input");
 const fileName = document.getElementById("file-name");
 const dirtyDot = document.getElementById("dirty-indicator");
 const welcome = document.getElementById("welcome");
 const frame = document.getElementById("editor-frame");
 const sourceView = document.getElementById("source-view");
+const formatBar = document.getElementById("format-bar");
 
 function markDirty() {
   if (!dirty) {
@@ -38,102 +41,34 @@ function getEditableHtml() {
   const doc = frame.contentDocument;
   if (!doc) return originalHtml;
 
-  const clone = doc.documentElement.cloneNode(true);
-  clone.querySelectorAll("[data-artifact-editable]").forEach((el) => {
-    el.removeAttribute("contenteditable");
-    el.removeAttribute("data-artifact-editable");
-  });
-
-  const injectedStyle = clone.querySelector("#artifact-editor-injected-style");
-  if (injectedStyle) injectedStyle.remove();
-
-  return "<!DOCTYPE html>\n" + clone.outerHTML;
+  doc.designMode = "off";
+  const html = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+  doc.designMode = "on";
+  return html;
 }
 
-function injectEditable(doc) {
-  const blockTags = new Set([
-    "P", "H1", "H2", "H3", "H4", "H5", "H6",
-    "LI", "TD", "TH", "BLOCKQUOTE", "FIGCAPTION",
-    "CAPTION", "DT", "DD", "SUMMARY", "PRE",
-  ]);
-
-  const textTags = new Set([
-    "P", "H1", "H2", "H3", "H4", "H5", "H6",
-    "LI", "TD", "TH", "BLOCKQUOTE", "FIGCAPTION",
-    "SPAN", "A", "STRONG", "EM", "B", "I", "U", "S",
-    "LABEL", "CAPTION", "DT", "DD", "SUMMARY",
-    "CODE", "PRE", "CITE", "Q", "ABBR", "TIME",
-    "MARK", "SMALL", "SUB", "SUP", "DEL", "INS",
-  ]);
-
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT, {
-    acceptNode(node) {
-      if (node.tagName === "SCRIPT" || node.tagName === "STYLE") {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-
-  const targets = new Set();
-  let node;
-  while ((node = walker.nextNode())) {
-    if (!node.textContent.trim()) continue;
-
-    if (blockTags.has(node.tagName)) {
-      targets.add(node);
-    } else if (textTags.has(node.tagName)) {
-      let covered = false;
-      let p = node.parentElement;
-      while (p && p !== doc.body) {
-        if (targets.has(p)) { covered = true; break; }
-        p = p.parentElement;
-      }
-      if (!covered) targets.add(node);
-    }
-  }
-
-  targets.forEach((el) => {
-    el.setAttribute("contenteditable", "true");
-    el.setAttribute("data-artifact-editable", "");
-  });
-
-  const style = doc.createElement("style");
-  style.id = "artifact-editor-injected-style";
-  style.textContent = `
-    [data-artifact-editable] {
-      outline: 1px dashed rgba(59,130,246,0.25);
-      outline-offset: 2px;
-      border-radius: 2px;
-      min-height: 1em;
-    }
-    [data-artifact-editable]:focus {
-      outline: 2px solid rgba(59,130,246,0.5);
-    }
-  `;
-  doc.head.appendChild(style);
-
-  doc.body.addEventListener("input", () => markDirty());
-}
-
-async function loadFile(path) {
-  const content = await invoke("open_file", { path });
-  originalHtml = content;
-  fileName.textContent = path.split("/").pop().split("\\").pop();
+function loadContent(html, label) {
+  originalHtml = html;
+  fileName.textContent = label;
   welcome.hidden = true;
   frame.hidden = false;
+  formatBar.hidden = false;
 
-  frame.srcdoc = content;
+  frame.srcdoc = html;
   frame.onload = () => {
-    injectEditable(frame.contentDocument);
+    const doc = frame.contentDocument;
+    doc.designMode = "on";
+    doc.addEventListener("input", () => markDirty());
   };
 
   enableButtons();
   markClean();
+  if (sourceMode) toggleSource();
+}
 
-  if (sourceMode) {
-    toggleSource();
-  }
+async function loadFile(path) {
+  const content = await invoke("open_file", { path });
+  loadContent(content, path.split("/").pop().split("\\").pop());
 }
 
 async function openFile() {
@@ -172,6 +107,30 @@ async function saveFileAs() {
   }
 }
 
+async function fetchArtifact() {
+  const url = urlInput.value.trim();
+  if (!url) return;
+  if (!url.includes("claude.ai")) {
+    alert("URL must be from claude.ai");
+    return;
+  }
+
+  btnFetch.disabled = true;
+  btnFetch.textContent = "Fetching…";
+
+  try {
+    const html = await invoke("fetch_artifact", { url });
+    const id = url.split("/").pop().split("?")[0];
+    loadContent(html, "artifact:" + id);
+    urlInput.value = "";
+  } catch (e) {
+    alert("Fetch failed: " + e);
+  } finally {
+    btnFetch.disabled = false;
+    btnFetch.textContent = "Fetch";
+  }
+}
+
 function toggleSource() {
   sourceMode = !sourceMode;
   btnSource.classList.toggle("active", sourceMode);
@@ -179,6 +138,7 @@ function toggleSource() {
   if (sourceMode) {
     sourceView.value = getEditableHtml();
     frame.hidden = true;
+    formatBar.hidden = true;
     sourceView.hidden = false;
     sourceView.focus();
   } else {
@@ -186,17 +146,34 @@ function toggleSource() {
     originalHtml = edited;
     frame.srcdoc = edited;
     frame.onload = () => {
-      injectEditable(frame.contentDocument);
+      frame.contentDocument.designMode = "on";
+      frame.contentDocument.addEventListener("input", () => markDirty());
     };
     sourceView.hidden = true;
     frame.hidden = false;
+    formatBar.hidden = false;
   }
 }
+
+// Format bar: execCommand on the iframe document
+formatBar.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-cmd]");
+  if (!btn) return;
+  const cmd = btn.dataset.cmd;
+  const val = btn.dataset.val || null;
+  frame.contentDocument.execCommand(cmd, false, val);
+  markDirty();
+  frame.contentWindow.focus();
+});
 
 btnOpen.addEventListener("click", openFile);
 btnSave.addEventListener("click", saveFile);
 btnSaveAs.addEventListener("click", saveFileAs);
 btnSource.addEventListener("click", toggleSource);
+btnFetch.addEventListener("click", fetchArtifact);
+urlInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") fetchArtifact();
+});
 
 sourceView.addEventListener("input", () => markDirty());
 

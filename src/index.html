@@ -8,25 +8,39 @@
   </head>
   <body>
     <header id="toolbar">
-      <div class="toolbar-left">
-        <button id="btn-open" title="Open HTML file (Cmd+O)">Open</button>
+      <div class="toolbar-group">
+        <button id="btn-open" title="Open file (Cmd+O)">Open</button>
         <button id="btn-save" title="Save (Cmd+S)" disabled>Save</button>
         <button id="btn-save-as" title="Save As (Cmd+Shift+S)" disabled>Save As</button>
+      </div>
+      <div class="toolbar-group url-group">
+        <input id="url-input" type="text" placeholder="Paste claude.ai artifact URL..." />
+        <button id="btn-fetch">Fetch</button>
       </div>
       <div class="toolbar-center">
         <span id="file-name">No file open</span>
         <span id="dirty-indicator" hidden>*</span>
       </div>
-      <div class="toolbar-right">
+      <div class="toolbar-group">
         <button id="btn-source" title="Toggle source view">Source</button>
       </div>
     </header>
+    <div id="format-bar" hidden>
+      <button data-cmd="bold" title="Bold (Cmd+B)"><strong>B</strong></button>
+      <button data-cmd="italic" title="Italic (Cmd+I)"><em>I</em></button>
+      <button data-cmd="underline" title="Underline (Cmd+U)"><u>U</u></button>
+      <span class="sep"></span>
+      <button data-cmd="formatBlock" data-val="H1">H1</button>
+      <button data-cmd="formatBlock" data-val="H2">H2</button>
+      <button data-cmd="formatBlock" data-val="H3">H3</button>
+      <button data-cmd="formatBlock" data-val="P">P</button>
+    </div>
     <main id="editor-area">
       <div id="welcome">
-        <p>Open an HTML artifact file to start editing.</p>
-        <p><kbd>Cmd+O</kbd> or click <strong>Open</strong></p>
+        <p>Open an HTML artifact file or paste a claude.ai URL above.</p>
+        <p><kbd>Cmd+O</kbd> to open &middot; paste a URL and click <strong>Fetch</strong></p>
       </div>
-      <iframe id="editor-frame" hidden sandbox="allow-same-origin allow-scripts"></iframe>
+      <iframe id="editor-frame" hidden></iframe>
       <textarea id="source-view" hidden spellcheck="false"></textarea>
     </main>
     <script type="module" src="/main.js"></script>
