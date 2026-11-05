@@ -32,103 +32,87 @@ fn get_current_path(state: State<AppState>) -> Option<String> {
     state.current_file.lock().unwrap().clone()
 }
 
-const EXTRACTION_SCRIPT: &str = r#"
+// Runs in the top-level frame only: UI bar + fetch interceptor + postMessage listener
+const TOP_SCRIPT: &str = r#"
 (function() {
-  function isArtifactPage() {
-    return /\/artifact\//.test(window.location.pathname)
-        || /\/code\/artifact\//.test(window.location.pathname);
-  }
+  var capturedHtml = null;
 
-  let importBar = null;
-  let statusEl = null;
-  let importBtn = null;
+  // --- Intercept fetch() to capture artifact HTML from API responses ---
+  var origFetch = window.fetch;
+  window.fetch = function() {
+    var p = origFetch.apply(this, arguments);
+    p.then(function(resp) {
+      var clone = resp.clone();
+      clone.text().then(function(text) {
+        if (text.length > 500) {
+          try {
+            var json = JSON.parse(text);
+            var h = findHtml(json);
+            if (h && best.depth < 0) onFound(h);
+          } catch(e) {
+            var t = text.trim();
+            if (best.depth < 0 && t.length > 500 && (t.indexOf('<!') === 0 || t.indexOf('<html') === 0)) {
+              onFound(text);
+            }
+          }
+        }
+      }).catch(function(){});
+    }).catch(function(){});
+    return p;
+  };
 
-  function createImportBar() {
-    if (importBar) return;
-    if (!document.body) return;
+  // --- Listen for postMessage from iframes (cross-origin extraction) ---
+  // Prefer the deepest frame (the artifact sits inside claude.ai's wrapper frame), then the largest.
+  var best = { depth: -1, len: 0 };
+  window.addEventListener('message', function(e) {
+    var d = e.data;
+    if (!d || d.type !== '__artifact_extract__' || !d.html || d.html.length < 200) return;
+    var depth = d.depth || 1;
+    if (depth > best.depth || (depth === best.depth && d.html.length >= best.len)) {
+      best = { depth: depth, len: d.html.length };
+      onFound(d.html);
+    }
+  });
 
-    importBar = document.createElement('div');
-    importBar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1e40af;color:white;display:flex;align-items:center;justify-content:space-between;padding:8px 16px;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-
-    statusEl = document.createElement('span');
-    importBar.appendChild(statusEl);
-
-    importBtn = document.createElement('button');
-    importBtn.textContent = 'Import to Editor';
-    importBtn.style.cssText = 'padding:6px 16px;background:white;color:#1e40af;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;opacity:0.5;';
-    importBtn.disabled = true;
-    importBar.appendChild(importBtn);
-
-    document.body.prepend(importBar);
-
-    importBtn.addEventListener('click', async function() {
-      var html = extractHtml();
-      if (!html) return;
-      statusEl.textContent = 'Importing…';
-      importBtn.disabled = true;
-      try {
-        await window.__TAURI__.event.emit('artifact-imported', html);
-        window.close();
-      } catch(e) {
-        statusEl.textContent = 'Import failed: ' + e;
-      }
-    });
-
-    if (isArtifactPage()) {
-      statusEl.textContent = 'Looking for artifact content…';
-      startPolling();
-    } else {
-      statusEl.textContent = 'Navigate to an artifact page, then import.';
+  function onFound(html) {
+    capturedHtml = html;
+    if (statusEl) {
+      statusEl.textContent = 'Artifact ready (' + Math.round(html.length / 1024) + ' KB)';
+    }
+    if (importBtn) {
+      importBtn.disabled = false;
+      importBtn.style.opacity = '1';
+    }
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
     }
   }
 
-  function startPolling() {
-    var attempts = 0;
-    var check = setInterval(function() {
-      attempts++;
-      var html = extractHtml();
-      if (html) {
-        clearInterval(check);
-        statusEl.textContent = 'Artifact ready (' + Math.round(html.length / 1024) + ' KB)';
-        importBtn.disabled = false;
-        importBtn.style.opacity = '1';
-      } else if (attempts > 30) {
-        clearInterval(check);
-        statusEl.textContent = 'Could not find artifact content. Is it fully loaded?';
-      }
-    }, 1000);
-  }
-
-  function extractHtml() {
-    // __NEXT_DATA__ JSON blob
+  // --- DOM-based extraction (fallback for same-origin iframes / inline data) ---
+  function extractFromDom() {
     var nd = document.getElementById('__NEXT_DATA__');
     if (nd) {
       try {
-        var found = findHtmlInData(JSON.parse(nd.textContent));
-        if (found) return found;
-      } catch(e) {}
-    }
-
-    // Any script[type="application/json"]
-    var scripts = document.querySelectorAll('script[type="application/json"]');
-    for (var i = 0; i < scripts.length; i++) {
-      try {
-        var f = findHtmlInData(JSON.parse(scripts[i].textContent));
+        var f = findHtml(JSON.parse(nd.textContent));
         if (f) return f;
       } catch(e) {}
     }
 
-    // iframe srcdoc
-    var srcdocFrames = document.querySelectorAll('iframe[srcdoc]');
-    for (var i = 0; i < srcdocFrames.length; i++) {
-      if (srcdocFrames[i].srcdoc.length > 100) return srcdocFrames[i].srcdoc;
+    var scripts = document.querySelectorAll('script[type="application/json"]');
+    for (var i = 0; i < scripts.length; i++) {
+      try {
+        var f = findHtml(JSON.parse(scripts[i].textContent));
+        if (f) return f;
+      } catch(e) {}
     }
 
-    // iframe contentDocument (same-origin only)
     var allFrames = document.querySelectorAll('iframe');
     for (var i = 0; i < allFrames.length; i++) {
+      var fr = allFrames[i];
+      if (fr.srcdoc && fr.srcdoc.length > 200) return fr.srcdoc;
       try {
-        var doc = allFrames[i].contentDocument;
+        var doc = fr.contentDocument;
         if (doc && doc.documentElement && doc.documentElement.outerHTML.length > 200) {
           return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
         }
@@ -138,7 +122,7 @@ const EXTRACTION_SCRIPT: &str = r#"
     return null;
   }
 
-  function findHtmlInData(v) {
+  function findHtml(v) {
     if (typeof v === 'string' && v.length > 200) {
       var t = v.trim();
       if (t.indexOf('<!') === 0 || t.indexOf('<html') === 0
@@ -149,32 +133,123 @@ const EXTRACTION_SCRIPT: &str = r#"
     }
     if (Array.isArray(v)) {
       for (var i = 0; i < v.length; i++) {
-        var f = findHtmlInData(v[i]);
+        var f = findHtml(v[i]);
         if (f) return f;
       }
     } else if (v && typeof v === 'object') {
-      var keys = ['content', 'html', 'body', 'published_html', 'source', 'artifact_content'];
+      var keys = ['content','html','body','published_html','source','artifact_content'];
       for (var k = 0; k < keys.length; k++) {
-        if (v[keys[k]]) {
-          var f = findHtmlInData(v[keys[k]]);
-          if (f) return f;
-        }
+        if (v[keys[k]]) { var f = findHtml(v[keys[k]]); if (f) return f; }
       }
       var vals = Object.values(v);
       for (var i = 0; i < vals.length; i++) {
-        var f = findHtmlInData(vals[i]);
+        var f = findHtml(vals[i]);
         if (f) return f;
       }
     }
     return null;
   }
 
-  // Re-run on every navigation within this window
-  if (document.body) {
-    createImportBar();
-  } else {
-    document.addEventListener('DOMContentLoaded', createImportBar);
+  // --- UI ---
+  var statusEl = null;
+  var importBtn = null;
+  var pollTimer = null;
+
+  function createBar() {
+    if (!document.body) return;
+
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1e40af;color:white;display:flex;align-items:center;justify-content:space-between;padding:8px 16px;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+
+    statusEl = document.createElement('span');
+    statusEl.textContent = 'Looking for artifact content…';
+    bar.appendChild(statusEl);
+
+    importBtn = document.createElement('button');
+    importBtn.textContent = 'Import to Editor';
+    importBtn.style.cssText = 'padding:6px 16px;background:white;color:#1e40af;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;opacity:0.5;';
+    importBtn.disabled = true;
+    bar.appendChild(importBtn);
+
+    document.body.prepend(bar);
+
+    importBtn.addEventListener('click', async function() {
+      var html = capturedHtml || extractFromDom();
+      if (!html) {
+        statusEl.textContent = 'No content found yet.';
+        return;
+      }
+      statusEl.textContent = 'Importing…';
+      importBtn.disabled = true;
+      try {
+        await window.__TAURI__.event.emit('artifact-imported', html);
+        window.close();
+      } catch(e) {
+        statusEl.textContent = 'Import failed: ' + e;
+      }
+    });
+
+    if (capturedHtml) {
+      onFound(capturedHtml);
+    } else {
+      var attempts = 0;
+      pollTimer = setInterval(function() {
+        attempts++;
+        if (capturedHtml) { onFound(capturedHtml); return; }
+        var dom = extractFromDom();
+        if (dom) { onFound(dom); return; }
+        if (attempts > 30) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          statusEl.textContent = 'Could not find artifact content. Is it fully loaded?';
+        }
+      }, 1000);
+    }
   }
+
+  if (document.body) createBar();
+  else document.addEventListener('DOMContentLoaded', createBar);
+})();
+"#;
+
+// Runs in ALL frames (including cross-origin artifact iframes).
+// If we're inside an iframe, extract our own HTML and post it to the parent.
+const FRAME_SCRIPT: &str = r#"
+(function() {
+  var isTop;
+  try { isTop = (window === window.top); } catch(e) { isTop = false; }
+  if (isTop) return;
+
+  var depth = 0;
+  try { for (var w = window; w !== window.top && depth < 20; w = w.parent) depth++; } catch(e) {}
+
+  function trySend() {
+    try {
+      var el = document.documentElement;
+      if (!el) return;
+      var html = el.outerHTML;
+      if (html && html.length > 200 && document.body && document.body.innerText.trim().length > 0) {
+        window.top.postMessage({
+          type: '__artifact_extract__',
+          depth: depth,
+          html: '<!DOCTYPE html>\n' + html
+        }, '*');
+      }
+    } catch(e) {}
+  }
+
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(trySend, 500);
+  }
+  window.addEventListener('load', function() { setTimeout(trySend, 500); });
+  document.addEventListener('DOMContentLoaded', function() { setTimeout(trySend, 500); });
+
+  var n = 0;
+  var poll = setInterval(function() {
+    n++;
+    trySend();
+    if (n >= 15) clearInterval(poll);
+  }, 2000);
 })();
 "#;
 
@@ -197,7 +272,8 @@ async fn open_artifact_window(app: tauri::AppHandle, url: String) -> Result<(), 
     )
     .title("Import Artifact")
     .inner_size(900.0, 700.0)
-    .initialization_script(EXTRACTION_SCRIPT)
+    .initialization_script(TOP_SCRIPT)
+    .initialization_script_for_all_frames(FRAME_SCRIPT)
     .build()
     .map_err(|e| e.to_string())?;
 

@@ -1,6 +1,6 @@
 [package]
 name = "claude-artifact-editor"
-version = "0.3.0"
+version = "0.3.1"
 description = "WYSIWYG editor for Claude Artifact HTML pages"
 authors = ["glen-testing"]
 edition = "2024"
