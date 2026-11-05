@@ -1,6 +1,6 @@
 use std::fs;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
 struct AppState {
     current_file: Mutex<Option<String>>,
@@ -32,201 +32,176 @@ fn get_current_path(state: State<AppState>) -> Option<String> {
     state.current_file.lock().unwrap().clone()
 }
 
-// --- Chrome cookie reading (macOS) ---
+const EXTRACTION_SCRIPT: &str = r#"
+(function() {
+  function isArtifactPage() {
+    return /\/artifact\//.test(window.location.pathname)
+        || /\/code\/artifact\//.test(window.location.pathname);
+  }
 
-#[cfg(target_os = "macos")]
-fn chrome_encryption_key() -> Result<Vec<u8>, String> {
-    let output = std::process::Command::new("security")
-        .args(["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"])
-        .output()
-        .map_err(|e| format!("Keychain access failed: {e}"))?;
+  let importBar = null;
+  let statusEl = null;
+  let importBtn = null;
 
-    if !output.status.success() {
-        return Err("Cannot read Chrome Safe Storage from Keychain — approve the prompt if it appeared".into());
+  function createImportBar() {
+    if (importBar) return;
+    if (!document.body) return;
+
+    importBar = document.createElement('div');
+    importBar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1e40af;color:white;display:flex;align-items:center;justify-content:space-between;padding:8px 16px;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+
+    statusEl = document.createElement('span');
+    importBar.appendChild(statusEl);
+
+    importBtn = document.createElement('button');
+    importBtn.textContent = 'Import to Editor';
+    importBtn.style.cssText = 'padding:6px 16px;background:white;color:#1e40af;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;opacity:0.5;';
+    importBtn.disabled = true;
+    importBar.appendChild(importBtn);
+
+    document.body.prepend(importBar);
+
+    importBtn.addEventListener('click', async function() {
+      var html = extractHtml();
+      if (!html) return;
+      statusEl.textContent = 'Importing…';
+      importBtn.disabled = true;
+      try {
+        await window.__TAURI__.event.emit('artifact-imported', html);
+        window.close();
+      } catch(e) {
+        statusEl.textContent = 'Import failed: ' + e;
+      }
+    });
+
+    if (isArtifactPage()) {
+      statusEl.textContent = 'Looking for artifact content…';
+      startPolling();
+    } else {
+      statusEl.textContent = 'Navigate to an artifact page, then import.';
+    }
+  }
+
+  function startPolling() {
+    var attempts = 0;
+    var check = setInterval(function() {
+      attempts++;
+      var html = extractHtml();
+      if (html) {
+        clearInterval(check);
+        statusEl.textContent = 'Artifact ready (' + Math.round(html.length / 1024) + ' KB)';
+        importBtn.disabled = false;
+        importBtn.style.opacity = '1';
+      } else if (attempts > 30) {
+        clearInterval(check);
+        statusEl.textContent = 'Could not find artifact content. Is it fully loaded?';
+      }
+    }, 1000);
+  }
+
+  function extractHtml() {
+    // __NEXT_DATA__ JSON blob
+    var nd = document.getElementById('__NEXT_DATA__');
+    if (nd) {
+      try {
+        var found = findHtmlInData(JSON.parse(nd.textContent));
+        if (found) return found;
+      } catch(e) {}
     }
 
-    let password = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
-    let mut key = [0u8; 16];
-    pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password.trim().as_bytes(), b"saltysalt", 1003, &mut key);
-    Ok(key.to_vec())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn chrome_encryption_key() -> Result<Vec<u8>, String> {
-    Err("Chrome cookie reading is only supported on macOS for now".into())
-}
-
-fn decrypt_cookie_value(encrypted: &[u8], key: &[u8]) -> Result<String, String> {
-    if encrypted.is_empty() {
-        return Ok(String::new());
-    }
-    if encrypted.len() < 4 || &encrypted[..3] != b"v10" {
-        return String::from_utf8(encrypted.to_vec()).map_err(|e| e.to_string());
+    // Any script[type="application/json"]
+    var scripts = document.querySelectorAll('script[type="application/json"]');
+    for (var i = 0; i < scripts.length; i++) {
+      try {
+        var f = findHtmlInData(JSON.parse(scripts[i].textContent));
+        if (f) return f;
+      } catch(e) {}
     }
 
-    use aes::Aes128;
-    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
-    type Dec = cbc::Decryptor<Aes128>;
-
-    let iv = [0x20u8; 16];
-    let mut buf = encrypted[3..].to_vec();
-    let pt = Dec::new(key.into(), &iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|e| format!("AES decrypt failed: {e}"))?;
-    String::from_utf8(pt.to_vec()).map_err(|e| e.to_string())
-}
-
-fn read_chrome_cookies(domain: &str) -> Result<Vec<(String, String)>, String> {
-    let key = chrome_encryption_key()?;
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    let db_path = format!("{home}/Library/Application Support/Google/Chrome/Default/Cookies");
-
-    if !std::path::Path::new(&db_path).exists() {
-        return Err("Chrome cookies DB not found — is Chrome installed?".into());
+    // iframe srcdoc
+    var srcdocFrames = document.querySelectorAll('iframe[srcdoc]');
+    for (var i = 0; i < srcdocFrames.length; i++) {
+      if (srcdocFrames[i].srcdoc.length > 100) return srcdocFrames[i].srcdoc;
     }
 
-    let tmp = std::env::temp_dir().join("_ae_cookies.db");
-    fs::copy(&db_path, &tmp).map_err(|e| format!("Cannot copy cookies DB (is Chrome running?): {e}"))?;
-
-    let conn = rusqlite::Connection::open_with_flags(
-        &tmp,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let mut stmt = conn
-        .prepare("SELECT name, encrypted_value FROM cookies WHERE host_key LIKE ?1")
-        .map_err(|e| e.to_string())?;
-
-    let rows: Vec<(String, Vec<u8>)> = stmt
-        .query_map([format!("%{domain}%")], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    let _ = fs::remove_file(&tmp);
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|(name, enc)| {
-            decrypt_cookie_value(&enc, &key)
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(|v| (name, v))
-        })
-        .collect())
-}
-
-// --- Artifact HTML extraction ---
-
-fn extract_artifact_html(page: &str) -> String {
-    if let Some(h) = extract_from_next_data(page) {
-        return h;
-    }
-    if let Some(h) = extract_from_srcdoc(page) {
-        return h;
-    }
-    page.to_string()
-}
-
-fn extract_from_next_data(html: &str) -> Option<String> {
-    let marker = r#"<script id="__NEXT_DATA__" type="application/json">"#;
-    let start = html.find(marker)? + marker.len();
-    let end = html[start..].find("</script>")? + start;
-    let val: serde_json::Value = serde_json::from_str(&html[start..end]).ok()?;
-    find_html_string(&val)
-}
-
-fn find_html_string(v: &serde_json::Value) -> Option<String> {
-    match v {
-        serde_json::Value::String(s) => {
-            let t = s.trim();
-            if s.len() > 200 && (t.starts_with("<!") || t.starts_with("<html") || t.starts_with("<title")) {
-                Some(s.clone())
-            } else {
-                None
-            }
+    // iframe contentDocument (same-origin only)
+    var allFrames = document.querySelectorAll('iframe');
+    for (var i = 0; i < allFrames.length; i++) {
+      try {
+        var doc = allFrames[i].contentDocument;
+        if (doc && doc.documentElement && doc.documentElement.outerHTML.length > 200) {
+          return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
         }
-        serde_json::Value::Object(m) => {
-            for key in ["content", "html", "body", "published_html", "source"] {
-                if let Some(found) = m.get(key).and_then(find_html_string) {
-                    return Some(found);
-                }
-            }
-            m.values().find_map(find_html_string)
-        }
-        serde_json::Value::Array(a) => a.iter().find_map(find_html_string),
-        _ => None,
+      } catch(e) {}
     }
-}
 
-fn extract_from_srcdoc(html: &str) -> Option<String> {
-    let marker = "srcdoc=\"";
-    let start = html.find(marker)? + marker.len();
-    let rest = html[start..].as_bytes();
-    let mut end = 0;
-    for (i, &b) in rest.iter().enumerate() {
-        if b == b'"' && (i == 0 || rest[i - 1] != b'\\') {
-            end = i;
-            break;
+    return null;
+  }
+
+  function findHtmlInData(v) {
+    if (typeof v === 'string' && v.length > 200) {
+      var t = v.trim();
+      if (t.indexOf('<!') === 0 || t.indexOf('<html') === 0
+          || t.indexOf('<head') === 0 || t.indexOf('<title') === 0
+          || t.indexOf('<style') === 0) {
+        return v;
+      }
+    }
+    if (Array.isArray(v)) {
+      for (var i = 0; i < v.length; i++) {
+        var f = findHtmlInData(v[i]);
+        if (f) return f;
+      }
+    } else if (v && typeof v === 'object') {
+      var keys = ['content', 'html', 'body', 'published_html', 'source', 'artifact_content'];
+      for (var k = 0; k < keys.length; k++) {
+        if (v[keys[k]]) {
+          var f = findHtmlInData(v[keys[k]]);
+          if (f) return f;
         }
+      }
+      var vals = Object.values(v);
+      for (var i = 0; i < vals.length; i++) {
+        var f = findHtmlInData(vals[i]);
+        if (f) return f;
+      }
     }
-    if end < 100 {
-        return None;
-    }
-    let encoded = &html[start..start + end];
-    Some(
-        encoded
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&#x27;", "'")
-            .replace("&#x2F;", "/"),
-    )
-}
+    return null;
+  }
+
+  // Re-run on every navigation within this window
+  if (document.body) {
+    createImportBar();
+  } else {
+    document.addEventListener('DOMContentLoaded', createImportBar);
+  }
+})();
+"#;
 
 #[tauri::command]
-async fn fetch_artifact(url: String) -> Result<String, String> {
+async fn open_artifact_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if !url.contains("claude.ai") {
         return Err("URL must be from claude.ai".into());
     }
 
-    let cookies = read_chrome_cookies("claude.ai")?;
-    let cookie_hdr: String = cookies
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let parsed = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {e}"))?;
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let resp = client
-        .get(&url)
-        .header("Cookie", &cookie_hdr)
-        .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-        .header("Accept", "text/html")
-        .send()
-        .await
-        .map_err(|e| format!("Fetch failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {} — are you logged into claude.ai in Chrome?", resp.status()));
+    if let Some(existing) = app.get_webview_window("artifact-fetch") {
+        let _ = existing.close();
     }
 
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "artifact-fetch",
+        tauri::WebviewUrl::External(parsed),
+    )
+    .title("Import Artifact")
+    .inner_size(900.0, 700.0)
+    .initialization_script(EXTRACTION_SCRIPT)
+    .build()
+    .map_err(|e| e.to_string())?;
 
-    if body.contains("sign in") && body.contains("/login") && body.len() < 50_000 {
-        return Err("Session expired — log into claude.ai in Chrome and try again".into());
-    }
-
-    Ok(extract_artifact_html(&body))
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -243,7 +218,7 @@ pub fn run() {
             save_file,
             save_file_as,
             get_current_path,
-            fetch_artifact,
+            open_artifact_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

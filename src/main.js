@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 let dirty = false;
 let sourceMode = false;
@@ -116,15 +117,13 @@ async function fetchArtifact() {
   }
 
   btnFetch.disabled = true;
-  btnFetch.textContent = "Fetching…";
+  btnFetch.textContent = "Opening…";
 
   try {
-    const html = await invoke("fetch_artifact", { url });
-    const id = url.split("/").pop().split("?")[0];
-    loadContent(html, "artifact:" + id);
+    await invoke("open_artifact_window", { url });
     urlInput.value = "";
   } catch (e) {
-    alert("Fetch failed: " + e);
+    alert("Failed to open artifact window: " + e);
   } finally {
     btnFetch.disabled = false;
     btnFetch.textContent = "Fetch";
@@ -155,7 +154,6 @@ function toggleSource() {
   }
 }
 
-// Format bar: execCommand on the iframe document
 formatBar.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-cmd]");
   if (!btn) return;
@@ -189,4 +187,8 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     saveFile();
   }
+});
+
+listen("artifact-imported", (event) => {
+  loadContent(event.payload, "artifact:imported");
 });
