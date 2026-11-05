@@ -190,5 +190,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 listen("artifact-imported", (event) => {
+  if (typeof event.payload !== "string") return;
   loadContent(event.payload, "artifact:imported");
+  invoke("close_artifact_window");
 });

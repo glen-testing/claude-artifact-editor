@@ -1,9 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "artifact-fetch",
-  "description": "Minimal capability for the artifact fetch window",
+  "description": "claude.ai pages in the import window may only emit events",
   "windows": ["artifact-fetch"],
+  "remote": {
+    "urls": ["https://claude.ai/*"]
+  },
   "permissions": [
-    "core:default"
+    "core:event:allow-emit"
   ]
 }

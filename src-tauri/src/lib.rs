@@ -183,7 +183,7 @@ const TOP_SCRIPT: &str = r#"
       importBtn.disabled = true;
       try {
         await window.__TAURI__.event.emit('artifact-imported', html);
-        window.close();
+        statusEl.textContent = 'Imported.';
       } catch(e) {
         statusEl.textContent = 'Import failed: ' + e;
       }
@@ -280,6 +280,13 @@ async fn open_artifact_window(app: tauri::AppHandle, url: String) -> Result<(), 
     Ok(())
 }
 
+#[tauri::command]
+fn close_artifact_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("artifact-fetch") {
+        let _ = w.close();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -295,6 +302,7 @@ pub fn run() {
             save_file_as,
             get_current_path,
             open_artifact_window,
+            close_artifact_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
